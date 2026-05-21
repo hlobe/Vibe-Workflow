@@ -6,13 +6,148 @@ from typing import Optional
 import httpx
 from fastapi import HTTPException
 
-from .content_fabric_client import generate_image as content_fabric_generate_image
+from .content_fabric_client import (
+    CONTENT_FABRIC_API_URL,
+    generate_image as content_fabric_generate_image,
+)
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 MU_API_KEY = os.getenv("MU_API_KEY")
+CONTENT_FABRIC_WORKFLOW_ID = "content-fabric-spike"
+CONTENT_FABRIC_MODEL_ID = "content-fabric-placeholder"
+CONTENT_FABRIC_NODE_ID = "generate-image"
+CONTENT_FABRIC_RUNS: dict[str, dict] = {}
+
+
+def _content_fabric_workflow_summary() -> dict:
+    return {
+        "id": CONTENT_FABRIC_WORKFLOW_ID,
+        "workflow_id": CONTENT_FABRIC_WORKFLOW_ID,
+        "name": "Content Fabric: Generate Image",
+        "category": "Content Fabric",
+        "thumbnail": None,
+        "updated_at": "2026-05-22T00:00:00Z",
+        "created_at": "2026-05-22T00:00:00Z",
+    }
+
+
+def _content_fabric_workflow_def() -> dict:
+    return {
+        **_content_fabric_workflow_summary(),
+        "run_id": "content-fabric-spike-run",
+        "is_owner": True,
+        "is_published": False,
+        "is_template": False,
+        "show_temp_button": False,
+        "data": {
+            "nodes": [
+                {
+                    "id": CONTENT_FABRIC_NODE_ID,
+                    "category": "image",
+                    "model": CONTENT_FABRIC_MODEL_ID,
+                    "position": {"x": 0, "y": 100},
+                    "input_params": {"prompt": "dragon fly"},
+                    "output_params": {"outputs": [], "resultUrl": None},
+                }
+            ]
+        },
+        "edges": [],
+        "run_history": {},
+    }
+
+
+def _content_fabric_node_schemas() -> dict:
+    return {
+        "categories": {
+            "image": {
+                "models": {
+                    CONTENT_FABRIC_MODEL_ID: {
+                        "name": "Content Fabric Placeholder",
+                        "description": "Generate an image through the local Content Fabric API.",
+                        "input_schema": {
+                            "schemas": {
+                                "input_data": {
+                                    "type": "object",
+                                    "required": ["prompt"],
+                                    "properties": {
+                                        "prompt": {
+                                            "type": "string",
+                                            "title": "Prompt",
+                                            "name": "prompt",
+                                            "field": "text",
+                                            "description": "Text prompt describing the image.",
+                                            "default": "dragon fly",
+                                        }
+                                    },
+                                }
+                            }
+                        },
+                    }
+                }
+            }
+        }
+    }
+
+
+def _is_content_fabric_workflow(workflow_id: str) -> bool:
+    return workflow_id == CONTENT_FABRIC_WORKFLOW_ID
+
+
+def _is_content_fabric_node(workflow_id: str, node_id: str) -> bool:
+    return _is_content_fabric_workflow(workflow_id) or node_id == CONTENT_FABRIC_NODE_ID
+
+
+def _extract_prompt(payload: dict) -> str | None:
+    return (
+        payload.get("prompt")
+        or payload.get("inputs", {}).get("prompt")
+        or payload.get("params", {}).get("prompt")
+    )
+
+
+def _absolute_content_fabric_url(url: str | None) -> str | None:
+    if not url:
+        return None
+    if url.startswith("http://") or url.startswith("https://"):
+        return url
+    return f"{CONTENT_FABRIC_API_URL.rstrip('/')}/{url.lstrip('/')}"
+
+
+def _record_content_fabric_run(node_id: str, job: dict) -> dict:
+    artifacts = job.get("artifacts") or []
+    first_artifact = artifacts[0] if artifacts else {}
+    image_url = _absolute_content_fabric_url(first_artifact.get("url"))
+    run_id = job.get("id")
+    latest = {
+        "id": run_id,
+        "node_run_id": run_id,
+        "status": job.get("status", "succeeded"),
+        "started_at": job.get("created_at"),
+        "finished_at": job.get("updated_at"),
+        "result": {
+            "id": run_id,
+            "outputs": [
+                {
+                    "type": "image_url",
+                    "value": image_url,
+                }
+            ],
+        },
+    }
+    CONTENT_FABRIC_RUNS[run_id] = {"nodes": {node_id: [latest]}}
+    return {
+        "run_id": run_id,
+        "id": run_id,
+        "status": job.get("status"),
+        "node_id": node_id,
+        "outputs": {
+            "image": image_url,
+            "job": job,
+        },
+    }
 
 async def get_api_key():
     api_key = MU_API_KEY
@@ -61,10 +196,20 @@ async def proxy_request_helper(method: str, url: str, payload: Optional[dict] = 
         raise HTTPException(status_code=response.status_code, detail=error_detail)
 
 async def create_or_update_workflow(payload: dict):
+    if _is_content_fabric_workflow(payload.get("workflow_id")):
+        return {
+            "workflow_id": CONTENT_FABRIC_WORKFLOW_ID,
+            "run_id": "content-fabric-spike-run",
+            "status": "saved",
+        }
+
     url = "https://api.muapi.ai/workflow/create"
     return await proxy_request_helper("POST", url, payload)
 
 async def get_node_schemas_helper(workflow_id: str):
+    if _is_content_fabric_workflow(workflow_id):
+        return _content_fabric_node_schemas()
+
     url = f"https://api.muapi.ai/workflow/{workflow_id}/node-schemas"
     return await proxy_request_helper("GET", url)
 
@@ -73,12 +218,22 @@ async def get_api_node_schemas_helper(workflow_id: str):
     return await proxy_request_helper("GET", url)
 
 async def get_workflow_def_helper(workflow_id: str):
+    if _is_content_fabric_workflow(workflow_id):
+        return _content_fabric_workflow_def()
+
     url = f"https://api.muapi.ai/workflow/get-workflow-def/{workflow_id}"
     return await proxy_request_helper("GET", url)
 
 async def get_workflow_defs_helper():
+    local_workflow = _content_fabric_workflow_summary()
+    if not MU_API_KEY:
+        return [local_workflow]
+
     url = "https://api.muapi.ai/workflow/get-workflow-defs"
-    return await proxy_request_helper("GET", url)
+    remote_workflows = await proxy_request_helper("GET", url)
+    if isinstance(remote_workflows, list):
+        return [local_workflow, *remote_workflows]
+    return [local_workflow]
 
 async def delete_workflow_def_by_id(workflow_id: str):
     url = f"https://api.muapi.ai/workflow/delete-workflow-def/{workflow_id}"
@@ -89,32 +244,29 @@ async def update_workflow_name_helper(workflow_id: str, payload: dict):
     return await proxy_request_helper("POST", url, payload)
 
 async def run_workflow_helper(workflow_id: str, payload: dict):
+    if _is_content_fabric_workflow(workflow_id):
+        return {"run_id": "content-fabric-spike-run", "status": "ready"}
+
     url = f"https://api.muapi.ai/workflow/{workflow_id}/run"
     return await proxy_request_helper("POST", url, payload)
 
 async def get_run_status_helper(run_id: str):
+    if run_id in CONTENT_FABRIC_RUNS:
+        return CONTENT_FABRIC_RUNS[run_id]
+    if run_id.startswith("content-fabric"):
+        raise HTTPException(status_code=404, detail="Run not found")
+
     url = f"https://api.muapi.ai/workflow/run/{run_id}/status"
     return await proxy_request_helper("GET", url)
 
 async def run_node_helper(workflow_id: str, node_id: str, payload: dict):
-    if workflow_id == "content-fabric-spike" or node_id == "generate-image":
-        prompt = payload.get("prompt") or payload.get("inputs", {}).get("prompt")
+    if _is_content_fabric_node(workflow_id, node_id):
+        prompt = _extract_prompt(payload)
         if not prompt:
             raise HTTPException(status_code=400, detail="prompt is required")
 
         job = await content_fabric_generate_image(prompt=prompt)
-        artifacts = job.get("artifacts") or []
-        first_artifact = artifacts[0] if artifacts else {}
-
-        return {
-            "id": job.get("id"),
-            "status": job.get("status"),
-            "node_id": node_id,
-            "outputs": {
-                "image": first_artifact.get("url"),
-                "job": job,
-            },
-        }
+        return _record_content_fabric_run(node_id, job)
 
     url = f"https://api.muapi.ai/workflow/{workflow_id}/node/{node_id}/run"
     return await proxy_request_helper("POST", url, payload)

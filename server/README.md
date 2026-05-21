@@ -39,6 +39,13 @@ The API will be available at:
 
 Set `CONTENT_FABRIC_API_URL=http://127.0.0.1:8099` to route the special workflow/node pair `content-fabric-spike` / `generate-image` to the local Content Fabric spike API.
 
+The backend also exposes a local workflow definition named `Content Fabric: Generate Image`.
+It appears in the workflow listing without requiring `MU_API_KEY`, opens at
+`/workflow/content-fabric-spike`, and contains one image node using the
+`content-fabric-placeholder` model. The image node saves locally, calls the
+Content Fabric API with `params.prompt`, and returns a pollable run status with
+an absolute artifact URL.
+
 ## API Endpoints
 
 - `GET /` - Welcome message
