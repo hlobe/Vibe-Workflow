@@ -35,6 +35,10 @@ The API will be available at:
 - Interactive API docs: http://localhost:8000/docs
 - Alternative API docs: http://localhost:8000/redoc
 
+## Content Fabric Spike
+
+Set `CONTENT_FABRIC_API_URL=http://127.0.0.1:8099` to route the special workflow/node pair `content-fabric-spike` / `generate-image` to the local Content Fabric spike API.
+
 ## API Endpoints
 
 - `GET /` - Welcome message

@@ -1,10 +1,12 @@
 import os
-import httpx
 import logging
-from fastapi import HTTPException
+from pathlib import Path
 from typing import Optional
 
-from pathlib import Path
+import httpx
+from fastapi import HTTPException
+
+from .content_fabric_client import generate_image as content_fabric_generate_image
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 logging.basicConfig(level=logging.INFO)
@@ -95,6 +97,25 @@ async def get_run_status_helper(run_id: str):
     return await proxy_request_helper("GET", url)
 
 async def run_node_helper(workflow_id: str, node_id: str, payload: dict):
+    if workflow_id == "content-fabric-spike" or node_id == "generate-image":
+        prompt = payload.get("prompt") or payload.get("inputs", {}).get("prompt")
+        if not prompt:
+            raise HTTPException(status_code=400, detail="prompt is required")
+
+        job = await content_fabric_generate_image(prompt=prompt)
+        artifacts = job.get("artifacts") or []
+        first_artifact = artifacts[0] if artifacts else {}
+
+        return {
+            "id": job.get("id"),
+            "status": job.get("status"),
+            "node_id": node_id,
+            "outputs": {
+                "image": first_artifact.get("url"),
+                "job": job,
+            },
+        }
+
     url = f"https://api.muapi.ai/workflow/{workflow_id}/node/{node_id}/run"
     return await proxy_request_helper("POST", url, payload)
 
