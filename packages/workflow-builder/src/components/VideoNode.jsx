@@ -601,11 +601,32 @@ const VideoGeneration = ({ id, data, selected }) => {
           )}
         </div>
       )}
-      <Handle 
-        type="target" 
-        position={Position.Left} 
-        id="videoInput" 
-        style={{ 
+      {properties && !data.selectedModel?.id.includes("passthrough") && Object.values(properties).some(m => m.enum) && (
+        <div className="px-3 pb-3 flex flex-col gap-2 border-t border-zinc-800/60 pt-2">
+          {Object.entries(properties).map(([key, meta]) => {
+            if (!meta.enum || meta.enum.length === 0) return null;
+            return (
+              <div key={key} className="flex items-center justify-between gap-2">
+                <label className="text-[10px] font-bold text-zinc-500 shrink-0">{meta.title || key}</label>
+                <select
+                  value={formValues[key] ?? meta.default ?? ""}
+                  onChange={(e) => handleChange(key, e.target.value)}
+                  className="bg-zinc-900/50 text-white text-xs py-1 px-2 rounded-lg border border-white/10 hover:border-white/20 outline-none cursor-pointer transition-colors"
+                >
+                  {meta.enum.map((opt) => (
+                    <option key={opt} value={opt}>{opt}</option>
+                  ))}
+                </select>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      <Handle
+        type="target"
+        position={Position.Left}
+        id="videoInput"
+        style={{
           top: 70,
           opacity: hasPrompt ? 1 : 0,
           pointerEvents: hasPrompt ? 'auto' : 'none',

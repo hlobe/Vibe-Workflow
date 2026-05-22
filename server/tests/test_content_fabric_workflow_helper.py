@@ -51,6 +51,21 @@ def test_content_fabric_node_schema_has_prompt_model():
     assert input_data["properties"]["prompt"]["field"] == "text"
 
 
+def test_injected_models_appear_in_non_content_fabric_schemas(monkeypatch):
+    monkeypatch.setattr(workflow_helper, "MU_API_KEY", None)
+
+    schemas = run(workflow_helper.get_node_schemas_helper("some-other-workflow"))
+
+    assert set(schemas["categories"]["image"]["models"]) == {
+        "content-fabric-flow",
+        "content-fabric-gpt",
+        "content-fabric-grok",
+    }
+    assert set(schemas["categories"]["video"]["models"]) == {
+        "content-fabric-grok-video",
+    }
+
+
 def test_content_fabric_workflow_save_stays_local():
     response = run(
         workflow_helper.create_or_update_workflow(
@@ -111,6 +126,91 @@ def test_content_fabric_run_node_creates_pollable_status(monkeypatch):
         latest["result"]["outputs"][0]["value"]
         == "http://127.0.0.1:8099/artifacts/job-123.svg"
     )
+
+
+def test_run_node_routes_injected_image_model(monkeypatch):
+    calls = []
+
+    async def fake_generate_image(prompt, provider="placeholder"):
+        calls.append({"prompt": prompt, "provider": provider})
+        return {
+            "id": "job-gpt",
+            "status": "succeeded",
+            "prompt": prompt,
+            "provider": provider,
+            "artifacts": [
+                {
+                    "kind": "image",
+                    "url": "/artifacts/job-gpt.png",
+                    "path": "spike-artifacts/job-gpt.png",
+                    "content_type": "image/png",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(workflow_helper, "content_fabric_generate_image", fake_generate_image)
+
+    response = run(
+        workflow_helper.run_node_helper(
+            "some-other-workflow",
+            "native-image-node",
+            {
+                "model": "content-fabric-gpt",
+                "params": {"prompt": "native graph prompt"},
+            },
+        )
+    )
+
+    assert calls == [{"prompt": "native graph prompt", "provider": "gpt"}]
+    assert response["run_id"] == "job-gpt"
+
+
+def test_run_node_routes_injected_video_model(monkeypatch):
+    calls = []
+
+    async def fake_generate_video(image_job_id, prompt, provider="grok"):
+        calls.append(
+            {"image_job_id": image_job_id, "prompt": prompt, "provider": provider}
+        )
+        return {
+            "id": "job-video",
+            "status": "succeeded",
+            "prompt": prompt,
+            "provider": provider,
+            "artifacts": [
+                {
+                    "kind": "video",
+                    "url": "/artifacts/job-video.mp4",
+                    "path": "spike-artifacts/job-video.mp4",
+                    "content_type": "video/mp4",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(workflow_helper, "content_fabric_generate_video", fake_generate_video)
+
+    response = run(
+        workflow_helper.run_node_helper(
+            "some-other-workflow",
+            "native-video-node",
+            {
+                "model": "content-fabric-grok-video",
+                "params": {
+                    "prompt": "slow cinematic push-in",
+                    "image_job_id": "job-gpt",
+                },
+            },
+        )
+    )
+
+    assert calls == [
+        {
+            "image_job_id": "job-gpt",
+            "prompt": "slow cinematic push-in",
+            "provider": "grok",
+        }
+    ]
+    assert response["run_id"] == "job-video"
 
 
 def test_content_fabric_unknown_run_returns_404():

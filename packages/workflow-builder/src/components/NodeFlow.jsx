@@ -2489,7 +2489,8 @@ const NodeFlow = ({ initialNodeSchemas, initialWorkflowData }) => {
                 </div>
                 {selectedNode?.data?.selectedModel ? (
                   (() => {
-                    const nodeType = selectedNode.id.startsWith("text") ? "text" : selectedNode.id.startsWith("image") ? "image" : selectedNode.id.startsWith("video") ? "video" : selectedNode.id.startsWith("audio") ? "audio": "utility";
+                    const nodeTypeMap = { textNode: "text", imageNode: "image", videoNode: "video", audioNode: "audio" };
+                    const nodeType = nodeTypeMap[selectedNode.type] || "utility";
                     const fullSchema = nodeSchemas?.categories?.[nodeType]?.models[selectedNode?.data?.selectedModel?.id]?.input_schema;
                     const inputSchema = fullSchema?.schemas?.input_data || fullSchema || {};
 

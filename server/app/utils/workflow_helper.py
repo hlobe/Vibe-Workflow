@@ -23,6 +23,14 @@ CONTENT_FABRIC_NODE_ID = "generate-image"
 CONTENT_FABRIC_VIDEO_MODEL_ID = "content-fabric-grok-video"
 CONTENT_FABRIC_VIDEO_NODE_ID = "generate-video"
 CONTENT_FABRIC_RUNS: dict[str, dict] = {}
+CONTENT_FABRIC_INJECTED_IMAGE_MODELS = {
+    "content-fabric-flow": "flow",
+    "content-fabric-gpt": "gpt",
+    "content-fabric-grok": "grok",
+}
+CONTENT_FABRIC_INJECTED_VIDEO_MODELS = {
+    "content-fabric-grok-video": "grok",
+}
 
 CONTENT_FABRIC_IMAGE_PROVIDERS = ("placeholder", "flow", "gpt", "grok")
 CONTENT_FABRIC_VIDEO_PROVIDERS = ("grok",)
@@ -159,6 +167,67 @@ def _content_fabric_node_schemas() -> dict:
                 }
             },
         }
+    }
+
+
+def _content_fabric_injected_schemas() -> dict:
+    def _image_model(model_id, provider_label):
+        return {
+            "name": f"Content Fabric: {provider_label.upper()}",
+            "description": f"Generate image via local Content Fabric ({provider_label}).",
+            "input_schema": {
+                "schemas": {
+                    "input_data": {
+                        "type": "object",
+                        "required": ["prompt"],
+                        "properties": {
+                            "prompt": {
+                                "type": "string",
+                                "title": "Prompt",
+                                "name": "prompt",
+                                "field": "text",
+                                "description": "Image prompt.",
+                                "default": "",
+                            }
+                        },
+                    }
+                }
+            },
+        }
+
+    def _video_model(model_id, provider_label):
+        return {
+            "name": f"Content Fabric: {provider_label.upper()} Video",
+            "description": f"Animate image to video via local Content Fabric ({provider_label}).",
+            "input_schema": {
+                "schemas": {
+                    "input_data": {
+                        "type": "object",
+                        "required": ["prompt"],
+                        "properties": {
+                            "prompt": {
+                                "type": "string",
+                                "title": "Motion Prompt",
+                                "name": "prompt",
+                                "field": "text",
+                                "description": "Motion prompt.",
+                                "default": "slow cinematic push-in",
+                            }
+                        },
+                    }
+                }
+            },
+        }
+
+    return {
+        "image": {
+            mid: _image_model(mid, prov)
+            for mid, prov in CONTENT_FABRIC_INJECTED_IMAGE_MODELS.items()
+        },
+        "video": {
+            mid: _video_model(mid, prov)
+            for mid, prov in CONTENT_FABRIC_INJECTED_VIDEO_MODELS.items()
+        },
     }
 
 
@@ -324,8 +393,25 @@ async def get_node_schemas_helper(workflow_id: str):
     if _is_content_fabric_workflow(workflow_id):
         return _content_fabric_node_schemas()
 
+    injected = _content_fabric_injected_schemas()
+
+    if not MU_API_KEY:
+        return {
+            "categories": {
+                "image": {"models": injected["image"]},
+                "video": {"models": injected["video"]},
+            }
+        }
+
     url = f"https://api.muapi.ai/workflow/{workflow_id}/node-schemas"
-    return await proxy_request_helper("GET", url)
+    schemas = await proxy_request_helper("GET", url)
+
+    if isinstance(schemas, dict) and "categories" in schemas:
+        for category in ("image", "video"):
+            schemas["categories"].setdefault(category, {}).setdefault("models", {}).update(
+                injected[category]
+            )
+    return schemas
 
 async def get_api_node_schemas_helper(workflow_id: str):
     url = f"https://api.muapi.ai/workflow/{workflow_id}/api-node-schemas"
@@ -374,6 +460,27 @@ async def get_run_status_helper(run_id: str):
     return await proxy_request_helper("GET", url)
 
 async def run_node_helper(workflow_id: str, node_id: str, payload: dict):
+    model = payload.get("model", "")
+
+    if model in CONTENT_FABRIC_INJECTED_IMAGE_MODELS:
+        prompt = _extract_prompt(payload)
+        if not prompt:
+            raise HTTPException(status_code=400, detail="prompt is required")
+        provider = CONTENT_FABRIC_INJECTED_IMAGE_MODELS[model]
+        job = await content_fabric_generate_image(prompt=prompt, provider=provider)
+        return _record_content_fabric_run(node_id, job)
+
+    if model in CONTENT_FABRIC_INJECTED_VIDEO_MODELS:
+        prompt = _extract_prompt(payload)
+        image_job_id = _extract_image_job_id(payload)
+        if not prompt:
+            raise HTTPException(status_code=400, detail="prompt is required")
+        provider = CONTENT_FABRIC_INJECTED_VIDEO_MODELS[model]
+        job = await content_fabric_generate_video(
+            image_job_id=image_job_id or "", prompt=prompt, provider=provider
+        )
+        return _record_content_fabric_run(node_id, job)
+
     if _is_content_fabric_node(workflow_id, node_id):
         prompt = _extract_prompt(payload)
         if not prompt:
