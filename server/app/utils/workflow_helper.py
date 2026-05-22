@@ -52,7 +52,7 @@ def _content_fabric_workflow_def() -> dict:
                     "category": "image",
                     "model": CONTENT_FABRIC_MODEL_ID,
                     "position": {"x": 0, "y": 100},
-                    "input_params": {"prompt": "dragon fly"},
+                    "input_params": {"prompt": "dragon fly", "provider": "placeholder"},
                     "output_params": {"outputs": [], "resultUrl": None},
                 },
                 {
@@ -97,7 +97,15 @@ def _content_fabric_node_schemas() -> dict:
                                             "field": "text",
                                             "description": "Text prompt describing the image.",
                                             "default": "dragon fly",
-                                        }
+                                        },
+                                        "provider": {
+                                            "type": "string",
+                                            "title": "Provider",
+                                            "name": "provider",
+                                            "field": "text",
+                                            "description": "Image provider: placeholder (free SVG), or flow/gpt/grok for real generation.",
+                                            "default": "placeholder",
+                                        },
                                     },
                                 }
                             }
@@ -168,6 +176,24 @@ def _extract_image_job_id(payload: dict) -> str | None:
         or payload.get("inputs", {}).get("image_job_id")
         or payload.get("params", {}).get("image_job_id")
     )
+
+
+CONTENT_FABRIC_IMAGE_PROVIDERS = ("placeholder", "flow", "gpt", "grok")
+
+
+def _extract_provider(payload: dict) -> str:
+    provider = (
+        payload.get("provider")
+        or payload.get("inputs", {}).get("provider")
+        or payload.get("params", {}).get("provider")
+        or "placeholder"
+    )
+    if provider not in CONTENT_FABRIC_IMAGE_PROVIDERS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"provider must be one of {', '.join(CONTENT_FABRIC_IMAGE_PROVIDERS)}",
+        )
+    return provider
 
 
 def _absolute_content_fabric_url(url: str | None) -> str | None:
@@ -341,7 +367,8 @@ async def run_node_helper(workflow_id: str, node_id: str, payload: dict):
                 image_job_id=image_job_id, prompt=prompt
             )
         else:
-            job = await content_fabric_generate_image(prompt=prompt)
+            provider = _extract_provider(payload)
+            job = await content_fabric_generate_image(prompt=prompt, provider=provider)
         return _record_content_fabric_run(node_id, job)
 
     url = f"https://api.muapi.ai/workflow/{workflow_id}/node/{node_id}/run"
