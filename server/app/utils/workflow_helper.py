@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from .content_fabric_client import (
     CONTENT_FABRIC_API_URL,
     generate_image as content_fabric_generate_image,
+    generate_video as content_fabric_generate_video,
 )
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -19,6 +20,8 @@ MU_API_KEY = os.getenv("MU_API_KEY")
 CONTENT_FABRIC_WORKFLOW_ID = "content-fabric-spike"
 CONTENT_FABRIC_MODEL_ID = "content-fabric-placeholder"
 CONTENT_FABRIC_NODE_ID = "generate-image"
+CONTENT_FABRIC_VIDEO_MODEL_ID = "content-fabric-grok-video"
+CONTENT_FABRIC_VIDEO_NODE_ID = "generate-video"
 CONTENT_FABRIC_RUNS: dict[str, dict] = {}
 
 
@@ -26,7 +29,7 @@ def _content_fabric_workflow_summary() -> dict:
     return {
         "id": CONTENT_FABRIC_WORKFLOW_ID,
         "workflow_id": CONTENT_FABRIC_WORKFLOW_ID,
-        "name": "Content Fabric: Generate Image",
+        "name": "Content Fabric: Image → Video",
         "category": "Content Fabric",
         "thumbnail": None,
         "updated_at": "2026-05-22T00:00:00Z",
@@ -51,10 +54,24 @@ def _content_fabric_workflow_def() -> dict:
                     "position": {"x": 0, "y": 100},
                     "input_params": {"prompt": "dragon fly"},
                     "output_params": {"outputs": [], "resultUrl": None},
-                }
+                },
+                {
+                    "id": CONTENT_FABRIC_VIDEO_NODE_ID,
+                    "category": "video",
+                    "model": CONTENT_FABRIC_VIDEO_MODEL_ID,
+                    "position": {"x": 360, "y": 100},
+                    "input_params": {"image_job_id": "", "prompt": "slow cinematic push-in"},
+                    "output_params": {"outputs": [], "resultUrl": None},
+                },
             ]
         },
-        "edges": [],
+        "edges": [
+            {
+                "id": f"{CONTENT_FABRIC_NODE_ID}->{CONTENT_FABRIC_VIDEO_NODE_ID}",
+                "source": CONTENT_FABRIC_NODE_ID,
+                "target": CONTENT_FABRIC_VIDEO_NODE_ID,
+            }
+        ],
         "run_history": {},
     }
 
@@ -87,7 +104,41 @@ def _content_fabric_node_schemas() -> dict:
                         },
                     }
                 }
-            }
+            },
+            "video": {
+                "models": {
+                    CONTENT_FABRIC_VIDEO_MODEL_ID: {
+                        "name": "Content Fabric Grok Video",
+                        "description": "Animate an upstream image into a video through the local Content Fabric API.",
+                        "input_schema": {
+                            "schemas": {
+                                "input_data": {
+                                    "type": "object",
+                                    "required": ["image_job_id", "prompt"],
+                                    "properties": {
+                                        "image_job_id": {
+                                            "type": "string",
+                                            "title": "Image Job ID",
+                                            "name": "image_job_id",
+                                            "field": "text",
+                                            "description": "Job id of the upstream image to animate.",
+                                            "default": "",
+                                        },
+                                        "prompt": {
+                                            "type": "string",
+                                            "title": "Prompt",
+                                            "name": "prompt",
+                                            "field": "text",
+                                            "description": "Motion prompt describing the animation.",
+                                            "default": "slow cinematic push-in",
+                                        },
+                                    },
+                                }
+                            }
+                        },
+                    }
+                }
+            },
         }
     }
 
@@ -97,7 +148,10 @@ def _is_content_fabric_workflow(workflow_id: str) -> bool:
 
 
 def _is_content_fabric_node(workflow_id: str, node_id: str) -> bool:
-    return _is_content_fabric_workflow(workflow_id) or node_id == CONTENT_FABRIC_NODE_ID
+    return _is_content_fabric_workflow(workflow_id) or node_id in (
+        CONTENT_FABRIC_NODE_ID,
+        CONTENT_FABRIC_VIDEO_NODE_ID,
+    )
 
 
 def _extract_prompt(payload: dict) -> str | None:
@@ -105,6 +159,14 @@ def _extract_prompt(payload: dict) -> str | None:
         payload.get("prompt")
         or payload.get("inputs", {}).get("prompt")
         or payload.get("params", {}).get("prompt")
+    )
+
+
+def _extract_image_job_id(payload: dict) -> str | None:
+    return (
+        payload.get("image_job_id")
+        or payload.get("inputs", {}).get("image_job_id")
+        or payload.get("params", {}).get("image_job_id")
     )
 
 
@@ -119,7 +181,10 @@ def _absolute_content_fabric_url(url: str | None) -> str | None:
 def _record_content_fabric_run(node_id: str, job: dict) -> dict:
     artifacts = job.get("artifacts") or []
     first_artifact = artifacts[0] if artifacts else {}
-    image_url = _absolute_content_fabric_url(first_artifact.get("url"))
+    kind = first_artifact.get("kind", "image")
+    media_url = _absolute_content_fabric_url(first_artifact.get("url"))
+    output_type = "video_url" if kind == "video" else "image_url"
+    media_key = "video" if kind == "video" else "image"
     run_id = job.get("id")
     latest = {
         "id": run_id,
@@ -131,8 +196,8 @@ def _record_content_fabric_run(node_id: str, job: dict) -> dict:
             "id": run_id,
             "outputs": [
                 {
-                    "type": "image_url",
-                    "value": image_url,
+                    "type": output_type,
+                    "value": media_url,
                 }
             ],
         },
@@ -144,7 +209,7 @@ def _record_content_fabric_run(node_id: str, job: dict) -> dict:
         "status": job.get("status"),
         "node_id": node_id,
         "outputs": {
-            "image": image_url,
+            media_key: media_url,
             "job": job,
         },
     }
@@ -265,7 +330,18 @@ async def run_node_helper(workflow_id: str, node_id: str, payload: dict):
         if not prompt:
             raise HTTPException(status_code=400, detail="prompt is required")
 
-        job = await content_fabric_generate_image(prompt=prompt)
+        if node_id == CONTENT_FABRIC_VIDEO_NODE_ID:
+            image_job_id = _extract_image_job_id(payload)
+            if not image_job_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="image_job_id is required (connect the image node's output)",
+                )
+            job = await content_fabric_generate_video(
+                image_job_id=image_job_id, prompt=prompt
+            )
+        else:
+            job = await content_fabric_generate_image(prompt=prompt)
         return _record_content_fabric_run(node_id, job)
 
     url = f"https://api.muapi.ai/workflow/{workflow_id}/node/{node_id}/run"

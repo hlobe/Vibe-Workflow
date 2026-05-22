@@ -19,3 +19,24 @@ async def generate_image(prompt: str, provider: str = "placeholder") -> dict[str
         )
         response.raise_for_status()
         return response.json()
+
+
+async def generate_video(
+    image_job_id: str,
+    prompt: str,
+    aspect_ratio: str = "1:1",
+    seconds: int = 6,
+) -> dict[str, Any]:
+    # Video generation polls the provider for minutes — give it room.
+    async with httpx.AsyncClient(timeout=600.0) as client:
+        response = await client.post(
+            f"{CONTENT_FABRIC_API_URL}/api/spike/generate-video",
+            json={
+                "image_job_id": image_job_id,
+                "prompt": prompt,
+                "aspect_ratio": aspect_ratio,
+                "seconds": seconds,
+            },
+        )
+        response.raise_for_status()
+        return response.json()
