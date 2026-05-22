@@ -24,6 +24,9 @@ CONTENT_FABRIC_VIDEO_MODEL_ID = "content-fabric-grok-video"
 CONTENT_FABRIC_VIDEO_NODE_ID = "generate-video"
 CONTENT_FABRIC_RUNS: dict[str, dict] = {}
 
+CONTENT_FABRIC_IMAGE_PROVIDERS = ("placeholder", "flow", "gpt", "grok")
+CONTENT_FABRIC_VIDEO_PROVIDERS = ("grok",)
+
 
 def _content_fabric_workflow_summary() -> dict:
     return {
@@ -60,7 +63,7 @@ def _content_fabric_workflow_def() -> dict:
                     "category": "video",
                     "model": CONTENT_FABRIC_VIDEO_MODEL_ID,
                     "position": {"x": 360, "y": 100},
-                    "input_params": {"image_job_id": "", "prompt": "slow cinematic push-in"},
+                    "input_params": {"image_job_id": "", "prompt": "slow cinematic push-in", "provider": "grok"},
                     "output_params": {"outputs": [], "resultUrl": None},
                 },
             ]
@@ -102,8 +105,8 @@ def _content_fabric_node_schemas() -> dict:
                                             "type": "string",
                                             "title": "Provider",
                                             "name": "provider",
-                                            "field": "text",
-                                            "description": "Image provider: placeholder (free SVG), or flow/gpt/grok for real generation.",
+                                            "enum": list(CONTENT_FABRIC_IMAGE_PROVIDERS),
+                                            "description": "Image provider.",
                                             "default": "placeholder",
                                         },
                                     },
@@ -139,6 +142,14 @@ def _content_fabric_node_schemas() -> dict:
                                             "field": "text",
                                             "description": "Motion prompt describing the animation.",
                                             "default": "slow cinematic push-in",
+                                        },
+                                        "provider": {
+                                            "type": "string",
+                                            "title": "Provider",
+                                            "name": "provider",
+                                            "enum": list(CONTENT_FABRIC_VIDEO_PROVIDERS),
+                                            "description": "Video provider.",
+                                            "default": "grok",
                                         },
                                     },
                                 }
@@ -178,9 +189,6 @@ def _extract_image_job_id(payload: dict) -> str | None:
     )
 
 
-CONTENT_FABRIC_IMAGE_PROVIDERS = ("placeholder", "flow", "gpt", "grok")
-
-
 def _extract_provider(payload: dict) -> str:
     provider = (
         payload.get("provider")
@@ -192,6 +200,21 @@ def _extract_provider(payload: dict) -> str:
         raise HTTPException(
             status_code=400,
             detail=f"provider must be one of {', '.join(CONTENT_FABRIC_IMAGE_PROVIDERS)}",
+        )
+    return provider
+
+
+def _extract_video_provider(payload: dict) -> str:
+    provider = (
+        payload.get("provider")
+        or payload.get("inputs", {}).get("provider")
+        or payload.get("params", {}).get("provider")
+        or "grok"
+    )
+    if provider not in CONTENT_FABRIC_VIDEO_PROVIDERS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"video provider must be one of {', '.join(CONTENT_FABRIC_VIDEO_PROVIDERS)}",
         )
     return provider
 
@@ -363,8 +386,9 @@ async def run_node_helper(workflow_id: str, node_id: str, payload: dict):
                     status_code=400,
                     detail="image_job_id is required (connect the image node's output)",
                 )
+            video_provider = _extract_video_provider(payload)
             job = await content_fabric_generate_video(
-                image_job_id=image_job_id, prompt=prompt
+                image_job_id=image_job_id, prompt=prompt, provider=video_provider
             )
         else:
             provider = _extract_provider(payload)

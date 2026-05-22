@@ -24,6 +24,7 @@ async def generate_image(prompt: str, provider: str = "placeholder") -> dict[str
 async def generate_video(
     image_job_id: str,
     prompt: str,
+    provider: str = "grok",
     aspect_ratio: str = "1:1",
     seconds: int = 6,
 ) -> dict[str, Any]:
@@ -34,6 +35,7 @@ async def generate_video(
             json={
                 "image_job_id": image_job_id,
                 "prompt": prompt,
+                "provider": provider,
                 "aspect_ratio": aspect_ratio,
                 "seconds": seconds,
             },

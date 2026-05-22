@@ -17,25 +17,26 @@ def test_content_fabric_workflow_is_listed():
     content_workflow = next(
         item for item in workflows if item["id"] == "content-fabric-spike"
     )
-    assert content_workflow["name"] == "Content Fabric: Generate Image"
+    assert content_workflow["name"] == "Content Fabric: Image → Video"
     assert content_workflow["category"] == "Content Fabric"
 
 
-def test_content_fabric_workflow_definition_has_image_node():
+def test_content_fabric_workflow_definition_has_image_and_video_nodes():
     workflow = run(workflow_helper.get_workflow_def_helper("content-fabric-spike"))
 
     assert workflow["workflow_id"] == "content-fabric-spike"
-    assert workflow["data"]["nodes"] == [
-        {
-            "id": "generate-image",
-            "category": "image",
-            "model": "content-fabric-placeholder",
-            "position": {"x": 0, "y": 100},
-            "input_params": {"prompt": "dragon fly"},
-            "output_params": {"outputs": [], "resultUrl": None},
-        }
-    ]
-    assert workflow["edges"] == []
+    nodes = workflow["data"]["nodes"]
+    assert len(nodes) == 2
+
+    image_node = next(n for n in nodes if n["id"] == "generate-image")
+    assert image_node["category"] == "image"
+    assert image_node["input_params"]["prompt"] == "dragon fly"
+    assert image_node["input_params"]["provider"] == "placeholder"
+
+    video_node = next(n for n in nodes if n["id"] == "generate-video")
+    assert video_node["category"] == "video"
+
+    assert len(workflow["edges"]) == 1
     assert workflow["run_history"] == {}
 
 
